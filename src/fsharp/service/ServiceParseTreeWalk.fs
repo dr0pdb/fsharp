@@ -115,7 +115,7 @@ module public AstTraversal =
     let dive node range project =
         range,(fun() -> project node)
 
-    let pick pos (outerRange:range) (_debugObj:obj) (diveResults:list<range*_>) =
+    let pick (pos: pos option) (outerRange:range) (_debugObj:obj) (diveResults:list<range*_>) =
         match diveResults with
         | [] -> None
         | _ ->
@@ -163,590 +163,598 @@ module public AstTraversal =
             None
 #endif
 
-    /// traverse an implementation file walking all the way down to SynExpr or TypeAbbrev at a particular location
-    ///
-    let Traverse(pos:pos, parseTree, visitor:AstVisitorBase<'T>) =
-        let pick x = pick pos x
-        let rec traverseSynModuleDecl path (decl:SynModuleDecl) =
-            let pick = pick decl.Range
-            let defaultTraverse m = 
-                let path = TraverseStep.Module m :: path
-                match m with
-                | SynModuleDecl.ModuleAbbrev(_ident, _longIdent, _range) -> None
-                | SynModuleDecl.NestedModule(_synComponentInfo, _isRec, synModuleDecls, _, _range) -> synModuleDecls |> List.map (fun x -> dive x x.Range (traverseSynModuleDecl path)) |> pick decl
-                | SynModuleDecl.Let(_, synBindingList, range) ->
-                    match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
-                    | Some x -> Some x
-                    | None -> synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path)) |> pick decl
-                | SynModuleDecl.DoExpr(_sequencePointInfoForBinding, synExpr, _range) -> traverseSynExpr path synExpr  
-                | SynModuleDecl.Types(synTypeDefnList, _range) -> synTypeDefnList |> List.map (fun x -> dive x x.Range (traverseSynTypeDefn path)) |> pick decl
-                | SynModuleDecl.Exception(_synExceptionDefn, _range) -> None
-                | SynModuleDecl.Open(_target, _range) -> None
-                | SynModuleDecl.Attributes(_synAttributes, _range) -> None
-                | SynModuleDecl.HashDirective(_parsedHashDirective, range) -> visitor.VisitHashDirective range
-                | SynModuleDecl.NamespaceFragment(synModuleOrNamespace) -> traverseSynModuleOrNamespace path synModuleOrNamespace
-            visitor.VisitModuleDecl(defaultTraverse, decl)
+    type AstTraversalBase(parseTree: ParsedInput, visitor:AstVisitorBase<'T>, ?pos:pos) =
+        member x.Traverse() =
+            let pick x = pick pos x
+            
+            let rec traverseSynModuleDecl path (decl:SynModuleDecl) =
+                let pick = pick decl.Range
+                let defaultTraverse m = 
+                    let path = TraverseStep.Module m :: path
+                    match m with
+                    | SynModuleDecl.ModuleAbbrev(_ident, _longIdent, _range) -> None
+                    | SynModuleDecl.NestedModule(_synComponentInfo, _isRec, synModuleDecls, _, _range) -> synModuleDecls |> List.map (fun x -> dive x x.Range (traverseSynModuleDecl path)) |> pick decl
+                    | SynModuleDecl.Let(_, synBindingList, range) ->
+                        match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
+                        | Some x -> Some x
+                        | None -> synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path)) |> pick decl
+                    | SynModuleDecl.DoExpr(_sequencePointInfoForBinding, synExpr, _range) -> traverseSynExpr path synExpr  
+                    | SynModuleDecl.Types(synTypeDefnList, _range) -> synTypeDefnList |> List.map (fun x -> dive x x.Range (traverseSynTypeDefn path)) |> pick decl
+                    | SynModuleDecl.Exception(_synExceptionDefn, _range) -> None
+                    | SynModuleDecl.Open(_target, _range) -> None
+                    | SynModuleDecl.Attributes(_synAttributes, _range) -> None
+                    | SynModuleDecl.HashDirective(_parsedHashDirective, range) -> visitor.VisitHashDirective range
+                    | SynModuleDecl.NamespaceFragment(synModuleOrNamespace) -> traverseSynModuleOrNamespace path synModuleOrNamespace
+                visitor.VisitModuleDecl(defaultTraverse, decl)
 
-        and traverseSynModuleOrNamespace path (SynModuleOrNamespace(_longIdent, _isRec, _isModule, synModuleDecls, _preXmlDoc, _synAttributes, _synAccessOpt, range) as mors) =
-            match visitor.VisitModuleOrNamespace(mors) with
-            | Some x -> Some x
-            | None ->
-                let path = TraverseStep.ModuleOrNamespace mors :: path
-                synModuleDecls |> List.map (fun x -> dive x x.Range (traverseSynModuleDecl path)) |> pick range mors
+            and traverseSynModuleOrNamespace path (SynModuleOrNamespace(_longIdent, _isRec, _isModule, synModuleDecls, _preXmlDoc, _synAttributes, _synAccessOpt, range) as mors) =
+                match visitor.VisitModuleOrNamespace(mors) with
+                | Some x -> Some x
+                | None ->
+                    let path = TraverseStep.ModuleOrNamespace mors :: path
+                    synModuleDecls |> List.map (fun x -> dive x x.Range (traverseSynModuleDecl path)) |> pick range mors
 
-        and traverseSynExpr path (expr:SynExpr) =
-            let pick = pick expr.Range
-            let defaultTraverse e = 
-                let origPath = path
-                let path = TraverseStep.Expr e :: path
-                let traverseSynExpr = traverseSynExpr path
-                match e with
+            and traverseSynExpr path (expr:SynExpr) =
+                let pick = pick expr.Range
+                let defaultTraverse e = 
+                    let origPath = path
+                    let path = TraverseStep.Expr e :: path
+                    let traverseSynExpr = traverseSynExpr path
+                    match e with
 
-                | SynExpr.Paren (synExpr, _, _, _parenRange) -> traverseSynExpr synExpr
+                    | SynExpr.Paren (synExpr, _, _, _parenRange) -> traverseSynExpr synExpr
 
-                | SynExpr.Quote (_synExpr, _, synExpr2, _, _range) -> 
-                    [//dive synExpr synExpr.Range traverseSynExpr // TODO, what is this?
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.Quote (_synExpr, _, synExpr2, _, _range) -> 
+                        [//dive synExpr synExpr.Range traverseSynExpr // TODO, what is this?
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.Const (_synConst, _range) -> None
+                    | SynExpr.Const (_synConst, _range) -> None
 
-                | SynExpr.InterpolatedString (parts, _) -> 
-                    [ for part in parts do
-                          match part with
-                          | SynInterpolatedStringPart.String _ -> ()
-                          | SynInterpolatedStringPart.FillExpr (fillExpr, _) ->
-                              yield dive fillExpr fillExpr.Range traverseSynExpr ]
-                    |> pick expr
+                    | SynExpr.InterpolatedString (parts, _) -> 
+                        [ for part in parts do
+                              match part with
+                              | SynInterpolatedStringPart.String _ -> ()
+                              | SynInterpolatedStringPart.FillExpr (fillExpr, _) ->
+                                  yield dive fillExpr fillExpr.Range traverseSynExpr ]
+                        |> pick expr
 
-                | SynExpr.Typed (synExpr, synType, _range) ->
-                    [ traverseSynExpr synExpr; traverseSynType synType ] |> List.tryPick id
+                    | SynExpr.Typed (synExpr, synType, _range) ->
+                        [ traverseSynExpr synExpr; traverseSynType synType ] |> List.tryPick id
 
-                | SynExpr.Tuple (_, synExprList, _, _range) 
-                | SynExpr.ArrayOrList (_, synExprList, _range) ->
-                    synExprList |> List.map (fun x -> dive x x.Range traverseSynExpr) |> pick expr
-                
-                | SynExpr.AnonRecd (_isStruct, copyOpt, synExprList, _range) -> 
-                    [   match copyOpt with
-                        | Some(expr, (withRange, _)) -> 
-                            yield dive expr expr.Range traverseSynExpr 
-                            yield dive () withRange (fun () ->
-                                if posGeq pos withRange.End then 
-                                    // special case: caret is after WITH
-                                    // { x with $ }
-                                    visitor.VisitRecordField (path, Some expr, None) 
-                                else
-                                    None
-                            )
-                        | _ -> ()
-                        for (_,x) in synExprList do 
-                            yield dive x x.Range traverseSynExpr
-                    ] |> pick expr
-
-                | SynExpr.Record (inheritOpt,copyOpt,fields, _range) -> 
-                    [ 
-                        let diveIntoSeparator offsideColumn scPosOpt copyOpt  = 
-                            match scPosOpt with
-                            | Some scPos -> 
-                                if posGeq pos scPos then 
-                                    visitor.VisitRecordField(path, copyOpt, None) // empty field after the inherits
-                                else None
-                            | None -> 
-                                //semicolon position is not available - use offside rule
-                                if pos.Column = offsideColumn then
-                                    visitor.VisitRecordField(path, copyOpt, None) // empty field after the inherits
-                                else None
-
-                        match inheritOpt with
-                        | Some(_ty,expr, _range, sepOpt, inheritRange) -> 
-                            // dive into argument
-                            yield dive expr expr.Range (fun expr ->
-                                // special-case:caret is located in the offside position below inherit 
-                                // inherit A()
-                                // $
-                                if not (rangeContainsPos expr.Range pos) && sepOpt.IsNone && pos.Column = inheritRange.StartColumn then
-                                    visitor.VisitRecordField(path, None, None)
-                                else
-                                    traverseSynExpr expr
+                    | SynExpr.Tuple (_, synExprList, _, _range) 
+                    | SynExpr.ArrayOrList (_, synExprList, _range) ->
+                        synExprList |> List.map (fun x -> dive x x.Range traverseSynExpr) |> pick expr
+                    
+                    | SynExpr.AnonRecd (_isStruct, copyOpt, synExprList, _range) -> 
+                        [   match copyOpt with
+                            | Some(expr, (withRange, _)) -> 
+                                yield dive expr expr.Range traverseSynExpr 
+                                yield dive () withRange (fun () ->
+                                    if posGeq pos withRange.End then 
+                                        // special case: caret is after WITH
+                                        // { x with $ }
+                                        visitor.VisitRecordField (path, Some expr, None) 
+                                    else
+                                        None
                                 )
-                            match sepOpt with
-                            | Some (sep, scPosOpt) ->
-                                yield dive () sep (fun () ->
-                                    // special case: caret is below 'inherit' + one or more fields are already defined
+                            | _ -> ()
+                            for (_,x) in synExprList do 
+                                yield dive x x.Range traverseSynExpr
+                        ] |> pick expr
+
+                    | SynExpr.Record (inheritOpt,copyOpt,fields, _range) -> 
+                        [ 
+                            let diveIntoSeparator offsideColumn scPosOpt copyOpt  = 
+                                match scPosOpt with
+                                | Some scPos -> 
+                                    if posGeq pos scPos then 
+                                        visitor.VisitRecordField(path, copyOpt, None) // empty field after the inherits
+                                    else None
+                                | None -> 
+                                    //semicolon position is not available - use offside rule
+                                    if pos.Column = offsideColumn then
+                                        visitor.VisitRecordField(path, copyOpt, None) // empty field after the inherits
+                                    else None
+
+                            match inheritOpt with
+                            | Some(_ty,expr, _range, sepOpt, inheritRange) -> 
+                                // dive into argument
+                                yield dive expr expr.Range (fun expr ->
+                                    // special-case:caret is located in the offside position below inherit 
                                     // inherit A()
                                     // $
-                                    // field1 = 5
-                                    diveIntoSeparator inheritRange.StartColumn scPosOpt None
+                                    if not (rangeContainsPos expr.Range pos) && sepOpt.IsNone && pos.Column = inheritRange.StartColumn then
+                                        visitor.VisitRecordField(path, None, None)
+                                    else
+                                        traverseSynExpr expr
                                     )
-                            | None -> ()
-                        | _ -> ()
-                        match copyOpt with
-                        | Some(expr, (withRange, _)) -> 
-                            yield dive expr expr.Range traverseSynExpr 
-                            yield dive () withRange (fun () ->
-                                if posGeq pos withRange.End then 
-                                    // special case: caret is after WITH
-                                    // { x with $ }
-                                    visitor.VisitRecordField (path, Some expr, None) 
-                                else
-                                    None
-                            )
-                        | _ -> ()
-                        let copyOpt = Option.map fst copyOpt
-                        for (field, _), e, sepOpt in fields do
-                            yield dive (path, copyOpt, Some field) field.Range (fun r -> 
-                                if rangeContainsPos field.Range pos then
-                                    visitor.VisitRecordField r
-                                else 
-                                    None
-                                )
-                            let offsideColumn = 
-                                match inheritOpt with
-                                | Some(_,_, _, _, inheritRange) -> inheritRange.StartColumn
-                                | None -> field.Range.StartColumn
-
-                            match e with
-                            | Some e -> yield dive e e.Range (fun expr ->
-                                // special case: caret is below field binding
-                                // field x = 5
-                                // $
-                                if not (rangeContainsPos e.Range pos) && sepOpt.IsNone && pos.Column = offsideColumn then
-                                    visitor.VisitRecordField(path, copyOpt, None)
-                                else
-                                    traverseSynExpr expr
-                                )
-                            | None -> ()
-
-                            match sepOpt with
-                            | Some (sep, scPosOpt) -> 
-                                yield dive () sep (fun () -> 
-                                    // special case: caret is between field bindings
-                                    // field1 = 5
-                                    // $
-                                    // field2 = 5
-                                    diveIntoSeparator offsideColumn scPosOpt copyOpt
-                                    )
+                                match sepOpt with
+                                | Some (sep, scPosOpt) ->
+                                    yield dive () sep (fun () ->
+                                        // special case: caret is below 'inherit' + one or more fields are already defined
+                                        // inherit A()
+                                        // $
+                                        // field1 = 5
+                                        diveIntoSeparator inheritRange.StartColumn scPosOpt None
+                                        )
+                                | None -> ()
                             | _ -> ()
+                            match copyOpt with
+                            | Some(expr, (withRange, _)) -> 
+                                yield dive expr expr.Range traverseSynExpr 
+                                yield dive () withRange (fun () ->
+                                    if posGeq pos withRange.End then 
+                                        // special case: caret is after WITH
+                                        // { x with $ }
+                                        visitor.VisitRecordField (path, Some expr, None) 
+                                    else
+                                        None
+                                )
+                            | _ -> ()
+                            let copyOpt = Option.map fst copyOpt
+                            for (field, _), e, sepOpt in fields do
+                                yield dive (path, copyOpt, Some field) field.Range (fun r -> 
+                                    if rangeContainsPos field.Range pos then
+                                        visitor.VisitRecordField r
+                                    else 
+                                        None
+                                    )
+                                let offsideColumn = 
+                                    match inheritOpt with
+                                    | Some(_,_, _, _, inheritRange) -> inheritRange.StartColumn
+                                    | None -> field.Range.StartColumn
 
-                    ] |> pick expr
+                                match e with
+                                | Some e -> yield dive e e.Range (fun expr ->
+                                    // special case: caret is below field binding
+                                    // field x = 5
+                                    // $
+                                    if not (rangeContainsPos e.Range pos) && sepOpt.IsNone && pos.Column = offsideColumn then
+                                        visitor.VisitRecordField(path, copyOpt, None)
+                                    else
+                                        traverseSynExpr expr
+                                    )
+                                | None -> ()
 
-                | SynExpr.New (_, _synType, synExpr, _range) -> traverseSynExpr synExpr
-                | SynExpr.ObjExpr (ty,baseCallOpt,binds,ifaces,_range1,_range2) -> 
-                    let result = 
-                        ifaces 
-                        |> Seq.map (fun (InterfaceImpl(ty, _, _)) -> ty)
-                        |> Seq.tryPick visitor.VisitInterfaceSynMemberDefnType
-                    
-                    if result.IsSome then 
-                        result
-                    else
-                    [
-                        match baseCallOpt with
-                        | Some(expr,_) -> 
-                            // this is like a call to 'new', so mock up a 'new' so we can recurse and use that existing logic
-                            let newCall = SynExpr.New (false, ty, expr, unionRanges ty.Range expr.Range)
-                            yield dive newCall newCall.Range traverseSynExpr
-                        | _ -> ()
-                        for b in binds do
-                            yield dive b b.RangeOfBindingAndRhs (traverseSynBinding path)
-                        for InterfaceImpl(_ty, binds, _range) in ifaces do
+                                match sepOpt with
+                                | Some (sep, scPosOpt) -> 
+                                    yield dive () sep (fun () -> 
+                                        // special case: caret is between field bindings
+                                        // field1 = 5
+                                        // $
+                                        // field2 = 5
+                                        diveIntoSeparator offsideColumn scPosOpt copyOpt
+                                        )
+                                | _ -> ()
+
+                        ] |> pick expr
+
+                    | SynExpr.New (_, _synType, synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.ObjExpr (ty,baseCallOpt,binds,ifaces,_range1,_range2) -> 
+                        let result = 
+                            ifaces 
+                            |> Seq.map (fun (InterfaceImpl(ty, _, _)) -> ty)
+                            |> Seq.tryPick visitor.VisitInterfaceSynMemberDefnType
+                        
+                        if result.IsSome then 
+                            result
+                        else
+                        [
+                            match baseCallOpt with
+                            | Some(expr,_) -> 
+                                // this is like a call to 'new', so mock up a 'new' so we can recurse and use that existing logic
+                                let newCall = SynExpr.New (false, ty, expr, unionRanges ty.Range expr.Range)
+                                yield dive newCall newCall.Range traverseSynExpr
+                            | _ -> ()
                             for b in binds do
                                 yield dive b b.RangeOfBindingAndRhs (traverseSynBinding path)
-                    ] |> pick expr
+                            for InterfaceImpl(_ty, binds, _range) in ifaces do
+                                for b in binds do
+                                    yield dive b b.RangeOfBindingAndRhs (traverseSynBinding path)
+                        ] |> pick expr
 
-                | SynExpr.While (_sequencePointInfoForWhileLoop, synExpr, synExpr2, _range) -> 
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
-
-                | SynExpr.For (_sequencePointInfoForForLoop, _ident, synExpr, _, synExpr2, synExpr3, _range) -> 
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr
-                     dive synExpr3 synExpr3.Range traverseSynExpr]
-                    |> pick expr
-
-                | SynExpr.ForEach (_sequencePointInfoForForLoop, _seqExprOnly, _isFromSource, synPat, synExpr, synExpr2, _range) ->
-                    [dive synPat synPat.Range traversePat
-                     dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
-
-                | SynExpr.ArrayOrListOfSeqExpr (_, synExpr, _range) -> traverseSynExpr synExpr
-
-                | SynExpr.CompExpr (_, _, synExpr, _range) -> 
-                    // now parser treats this syntactic expression as computation expression
-                    // { identifier }
-                    // here we detect this situation and treat CompExpr  { Identifier } as attempt to create record
-                    // note: sequence expressions use SynExpr.CompExpr too - they need to be filtered out
-                    let isPartOfArrayOrList = 
-                        match origPath with
-                        | TraverseStep.Expr(SynExpr.ArrayOrListOfSeqExpr (_, _, _)) :: _ -> true
-                        | _ -> false
-                    let ok = 
-                        match isPartOfArrayOrList, synExpr with
-                        | false, SynExpr.Ident ident -> visitor.VisitRecordField(path, None, Some (LongIdentWithDots([ident], [])))
-                        | false, SynExpr.LongIdent (false, lidwd, _, _) -> visitor.VisitRecordField(path, None, Some lidwd)
-                        | _ -> None
-                    if ok.IsSome then ok
-                    else
-                    traverseSynExpr synExpr
-
-                | SynExpr.Lambda (_, _, synSimplePats, synExpr, _, _range) ->
-                    match synSimplePats with
-                    | SynSimplePats.SimplePats(pats,_) ->
-                        match visitor.VisitSimplePats(pats) with
-                        | Some x -> Some x
-                        | None -> traverseSynExpr synExpr
-                    | _ -> traverseSynExpr synExpr
-
-                | SynExpr.MatchLambda (_isExnMatch,_argm,synMatchClauseList,_spBind,_wholem) -> 
-                    synMatchClauseList 
-                    |> List.map (fun x -> dive x x.Range (traverseSynMatchClause path))
-                    |> pick expr
-
-                | SynExpr.Match (_sequencePointInfoForBinding, synExpr, synMatchClauseList, _range) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     yield! synMatchClauseList |> List.map (fun x -> dive x x.RangeOfGuardAndRhs (traverseSynMatchClause path))]
-                    |> pick expr
-
-                | SynExpr.Do (synExpr, _range) -> traverseSynExpr synExpr
-
-                | SynExpr.Assert (synExpr, _range) -> traverseSynExpr synExpr
-
-                | SynExpr.Fixed (synExpr, _range) -> traverseSynExpr synExpr
-
-                | SynExpr.App (_exprAtomicFlag, isInfix, synExpr, synExpr2, _range) ->
-                    if isInfix then
-                        [dive synExpr2 synExpr2.Range traverseSynExpr
-                         dive synExpr synExpr.Range traverseSynExpr]   // reverse the args
-                        |> pick expr
-                    else
+                    | SynExpr.While (_sequencePointInfoForWhileLoop, synExpr, synExpr2, _range) -> 
                         [dive synExpr synExpr.Range traverseSynExpr
                          dive synExpr2 synExpr2.Range traverseSynExpr]
                         |> pick expr
 
-                | SynExpr.TypeApp (synExpr, _, _synTypeList, _commas, _, _, _range) -> traverseSynExpr synExpr
-
-                | SynExpr.LetOrUse (_, _, synBindingList, synExpr, range) -> 
-                    match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
-                    | Some x -> Some x
-                    | None ->
-                        [yield! synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path))
-                         yield dive synExpr synExpr.Range traverseSynExpr]
+                    | SynExpr.For (_sequencePointInfoForForLoop, _ident, synExpr, _, synExpr2, synExpr3, _range) -> 
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr
+                         dive synExpr3 synExpr3.Range traverseSynExpr]
                         |> pick expr
 
-                | SynExpr.TryWith (synExpr, _range, synMatchClauseList, _range2, _range3, _sequencePointInfoForTry, _sequencePointInfoForWith) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     yield! synMatchClauseList |> List.map (fun x -> dive x x.Range (traverseSynMatchClause path))]
-                    |> pick expr
+                    | SynExpr.ForEach (_sequencePointInfoForForLoop, _seqExprOnly, _isFromSource, synPat, synExpr, synExpr2, _range) ->
+                        [dive synPat synPat.Range traversePat
+                         dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.TryFinally (synExpr, synExpr2, _range, _sequencePointInfoForTry, _sequencePointInfoForFinally) -> 
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.ArrayOrListOfSeqExpr (_, synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.Lazy (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.CompExpr (_, _, synExpr, _range) -> 
+                        // now parser treats this syntactic expression as computation expression
+                        // { identifier }
+                        // here we detect this situation and treat CompExpr  { Identifier } as attempt to create record
+                        // note: sequence expressions use SynExpr.CompExpr too - they need to be filtered out
+                        let isPartOfArrayOrList = 
+                            match origPath with
+                            | TraverseStep.Expr(SynExpr.ArrayOrListOfSeqExpr (_, _, _)) :: _ -> true
+                            | _ -> false
+                        let ok = 
+                            match isPartOfArrayOrList, synExpr with
+                            | false, SynExpr.Ident ident -> visitor.VisitRecordField(path, None, Some (LongIdentWithDots([ident], [])))
+                            | false, SynExpr.LongIdent (false, lidwd, _, _) -> visitor.VisitRecordField(path, None, Some lidwd)
+                            | _ -> None
+                        if ok.IsSome then ok
+                        else
+                        traverseSynExpr synExpr
 
-                | SynExpr.SequentialOrImplicitYield (_sequencePointInfoForSequential, synExpr, synExpr2, _, _range) 
+                    | SynExpr.Lambda (_, _, synSimplePats, synExpr, _, _range) ->
+                        match synSimplePats with
+                        | SynSimplePats.SimplePats(pats,_) ->
+                            match visitor.VisitSimplePats(pats) with
+                            | Some x -> Some x
+                            | None -> traverseSynExpr synExpr
+                        | _ -> traverseSynExpr synExpr
 
-                | SynExpr.Sequential (_sequencePointInfoForSequential, _, synExpr, synExpr2, _range) -> 
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.MatchLambda (_isExnMatch,_argm,synMatchClauseList,_spBind,_wholem) -> 
+                        synMatchClauseList 
+                        |> List.map (fun x -> dive x x.Range (traverseSynMatchClause path))
+                        |> pick expr
 
-                | SynExpr.IfThenElse (synExpr, synExpr2, synExprOpt, _sequencePointInfoForBinding, _isRecovery, _range, _range2) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     yield dive synExpr2 synExpr2.Range traverseSynExpr
-                     match synExprOpt with 
-                     | None -> ()
-                     | Some(x) -> yield dive x x.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.Match (_sequencePointInfoForBinding, synExpr, synMatchClauseList, _range) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         yield! synMatchClauseList |> List.map (fun x -> dive x x.RangeOfGuardAndRhs (traverseSynMatchClause path))]
+                        |> pick expr
 
-                | SynExpr.Ident (_ident) -> None
+                    | SynExpr.Do (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.LongIdent (_, _longIdent, _altNameRefCell, _range) -> None
+                    | SynExpr.Assert (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.LongIdentSet (_longIdent, synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.Fixed (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.DotGet (synExpr, _dotm, _longIdent, _range) -> traverseSynExpr synExpr
+                    | SynExpr.App (_exprAtomicFlag, isInfix, synExpr, synExpr2, _range) ->
+                        if isInfix then
+                            [dive synExpr2 synExpr2.Range traverseSynExpr
+                             dive synExpr synExpr.Range traverseSynExpr]   // reverse the args
+                            |> pick expr
+                        else
+                            [dive synExpr synExpr.Range traverseSynExpr
+                             dive synExpr2 synExpr2.Range traverseSynExpr]
+                            |> pick expr
 
-                | SynExpr.Set (synExpr, synExpr2, _)
+                    | SynExpr.TypeApp (synExpr, _, _synTypeList, _commas, _, _, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.DotSet (synExpr, _, synExpr2, _) ->
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.LetOrUse (_, _, synBindingList, synExpr, range) -> 
+                        match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
+                        | Some x -> Some x
+                        | None ->
+                            [yield! synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path))
+                             yield dive synExpr synExpr.Range traverseSynExpr]
+                            |> pick expr
 
-                | SynExpr.DotIndexedGet (synExpr, synExprList, _range, _range2) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     for synExpr in synExprList do 
-                         for x in synExpr.Exprs do 
-                             yield dive x x.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.TryWith (synExpr, _range, synMatchClauseList, _range2, _range3, _sequencePointInfoForTry, _sequencePointInfoForWith) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         yield! synMatchClauseList |> List.map (fun x -> dive x x.Range (traverseSynMatchClause path))]
+                        |> pick expr
 
-                | SynExpr.DotIndexedSet (synExpr, synExprList, synExpr2, _, _range, _range2) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     for synExpr in synExprList do 
-                         for x in synExpr.Exprs do 
-                             yield dive x x.Range traverseSynExpr
-                     yield dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.TryFinally (synExpr, synExpr2, _range, _sequencePointInfoForTry, _sequencePointInfoForFinally) -> 
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.JoinIn (synExpr1, _range, synExpr2, _range2) -> 
-                    [dive synExpr1 synExpr1.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.Lazy (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.NamedIndexedPropertySet (_longIdent, synExpr, synExpr2, _range) ->
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.SequentialOrImplicitYield (_sequencePointInfoForSequential, synExpr, synExpr2, _, _range) 
 
-                | SynExpr.DotNamedIndexedPropertySet (synExpr, _longIdent, synExpr2, synExpr3, _range) ->  
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synExpr2 synExpr2.Range traverseSynExpr
-                     dive synExpr3 synExpr3.Range traverseSynExpr]
-                    |> pick expr
+                    | SynExpr.Sequential (_sequencePointInfoForSequential, _, synExpr, synExpr2, _range) -> 
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.TypeTest (synExpr, synType, _range)
+                    | SynExpr.IfThenElse (synExpr, synExpr2, synExprOpt, _sequencePointInfoForBinding, _isRecovery, _range, _range2) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         yield dive synExpr2 synExpr2.Range traverseSynExpr
+                         match synExprOpt with 
+                         | None -> ()
+                         | Some(x) -> yield dive x x.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.Upcast (synExpr, synType, _range)
+                    | SynExpr.Ident (_ident) -> None
 
-                | SynExpr.Downcast (synExpr, synType, _range) ->
-                    [dive synExpr synExpr.Range traverseSynExpr
-                     dive synType synType.Range traverseSynType]
-                    |> pick expr
+                    | SynExpr.LongIdent (_, _longIdent, _altNameRefCell, _range) -> None
 
-                | SynExpr.InferredUpcast (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.LongIdentSet (_longIdent, synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.InferredDowncast (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.DotGet (synExpr, _dotm, _longIdent, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.Null (_range) -> None
+                    | SynExpr.Set (synExpr, synExpr2, _)
 
-                | SynExpr.AddressOf (_, synExpr, _range, _range2) -> traverseSynExpr synExpr
+                    | SynExpr.DotSet (synExpr, _, synExpr2, _) ->
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.TraitCall (_synTyparList, _synMemberSig, synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.DotIndexedGet (synExpr, synExprList, _range, _range2) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         for synExpr in synExprList do 
+                             for x in synExpr.Exprs do 
+                                 yield dive x x.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.ImplicitZero (_range) -> None
+                    | SynExpr.DotIndexedSet (synExpr, synExprList, synExpr2, _, _range, _range2) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         for synExpr in synExprList do 
+                             for x in synExpr.Exprs do 
+                                 yield dive x x.Range traverseSynExpr
+                         yield dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.YieldOrReturn (_, synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.JoinIn (synExpr1, _range, synExpr2, _range2) -> 
+                        [dive synExpr1 synExpr1.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.YieldOrReturnFrom (_, synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.NamedIndexedPropertySet (_longIdent, synExpr, synExpr2, _range) ->
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.LetOrUseBang(_sequencePointInfoForBinding, _, _, synPat, synExpr, andBangSynExprs, synExpr2, _range) -> 
-                    [
-                        yield dive synPat synPat.Range traversePat
-                        yield dive synExpr synExpr.Range traverseSynExpr
-                        yield!
-                            [ for (_,_,_,andBangSynPat,andBangSynExpr,_) in andBangSynExprs do
-                                yield (dive andBangSynPat andBangSynPat.Range traversePat)
-                                yield (dive andBangSynExpr andBangSynExpr.Range traverseSynExpr)]
-                        yield dive synExpr2 synExpr2.Range traverseSynExpr
-                    ]
-                    |> pick expr
+                    | SynExpr.DotNamedIndexedPropertySet (synExpr, _longIdent, synExpr2, synExpr3, _range) ->  
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synExpr2 synExpr2.Range traverseSynExpr
+                         dive synExpr3 synExpr3.Range traverseSynExpr]
+                        |> pick expr
 
-                | SynExpr.MatchBang (_sequencePointInfoForBinding, synExpr, synMatchClauseList, _range) -> 
-                    [yield dive synExpr synExpr.Range traverseSynExpr
-                     yield! synMatchClauseList |> List.map (fun x -> dive x x.RangeOfGuardAndRhs (traverseSynMatchClause path))]
-                    |> pick expr
+                    | SynExpr.TypeTest (synExpr, synType, _range)
 
-                | SynExpr.DoBang (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.Upcast (synExpr, synType, _range)
 
-                | SynExpr.LibraryOnlyILAssembly _ -> None
+                    | SynExpr.Downcast (synExpr, synType, _range) ->
+                        [dive synExpr synExpr.Range traverseSynExpr
+                         dive synType synType.Range traverseSynType]
+                        |> pick expr
 
-                | SynExpr.LibraryOnlyStaticOptimization _ -> None
+                    | SynExpr.InferredUpcast (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.LibraryOnlyUnionCaseFieldGet _ -> None
+                    | SynExpr.InferredDowncast (synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.LibraryOnlyUnionCaseFieldSet _ -> None
+                    | SynExpr.Null (_range) -> None
 
-                | SynExpr.ArbitraryAfterError (_debugStr, _range) -> None
+                    | SynExpr.AddressOf (_, synExpr, _range, _range2) -> traverseSynExpr synExpr
 
-                | SynExpr.FromParseError (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.TraitCall (_synTyparList, _synMemberSig, synExpr, _range) -> traverseSynExpr synExpr
 
-                | SynExpr.DiscardAfterMissingQualificationAfterDot (synExpr, _range) -> traverseSynExpr synExpr
+                    | SynExpr.ImplicitZero (_range) -> None
 
-            visitor.VisitExpr(path, traverseSynExpr path, defaultTraverse, expr)
+                    | SynExpr.YieldOrReturn (_, synExpr, _range) -> traverseSynExpr synExpr
 
-        and traversePat (pat: SynPat) =
-            let defaultTraverse p =
-                match p with
-                | SynPat.Paren (p, _) -> traversePat p
-                | SynPat.Or (p1, p2, _) -> [ p1; p2] |> List.tryPick traversePat
-                | SynPat.Ands (ps, _)
-                | SynPat.Tuple (_, ps, _)
-                | SynPat.ArrayOrList (_, ps, _) -> ps |> List.tryPick traversePat
-                | SynPat.Attrib (p, _, _) -> traversePat p
-                | SynPat.LongIdent(_, _, _, args, _, _) ->
-                    match args with
-                    | SynArgPats.Pats ps -> ps |> List.tryPick traversePat
-                    | SynArgPats.NamePatPairs (ps, _) ->
-                        ps |> List.map snd |> List.tryPick traversePat
-                | SynPat.Typed (p, ty, _) ->
-                    [ traversePat p; traverseSynType ty ] |> List.tryPick id
-                | _ -> None
+                    | SynExpr.YieldOrReturnFrom (_, synExpr, _range) -> traverseSynExpr synExpr
+
+                    | SynExpr.LetOrUseBang(_sequencePointInfoForBinding, _, _, synPat, synExpr, andBangSynExprs, synExpr2, _range) -> 
+                        [
+                            yield dive synPat synPat.Range traversePat
+                            yield dive synExpr synExpr.Range traverseSynExpr
+                            yield!
+                                [ for (_,_,_,andBangSynPat,andBangSynExpr,_) in andBangSynExprs do
+                                    yield (dive andBangSynPat andBangSynPat.Range traversePat)
+                                    yield (dive andBangSynExpr andBangSynExpr.Range traverseSynExpr)]
+                            yield dive synExpr2 synExpr2.Range traverseSynExpr
+                        ]
+                        |> pick expr
+
+                    | SynExpr.MatchBang (_sequencePointInfoForBinding, synExpr, synMatchClauseList, _range) -> 
+                        [yield dive synExpr synExpr.Range traverseSynExpr
+                         yield! synMatchClauseList |> List.map (fun x -> dive x x.RangeOfGuardAndRhs (traverseSynMatchClause path))]
+                        |> pick expr
+
+                    | SynExpr.DoBang (synExpr, _range) -> traverseSynExpr synExpr
+
+                    | SynExpr.LibraryOnlyILAssembly _ -> None
+
+                    | SynExpr.LibraryOnlyStaticOptimization _ -> None
+
+                    | SynExpr.LibraryOnlyUnionCaseFieldGet _ -> None
+
+                    | SynExpr.LibraryOnlyUnionCaseFieldSet _ -> None
+
+                    | SynExpr.ArbitraryAfterError (_debugStr, _range) -> None
+
+                    | SynExpr.FromParseError (synExpr, _range) -> traverseSynExpr synExpr
+
+                    | SynExpr.DiscardAfterMissingQualificationAfterDot (synExpr, _range) -> traverseSynExpr synExpr
+
+                visitor.VisitExpr(path, traverseSynExpr path, defaultTraverse, expr)
+
+            and traversePat (pat: SynPat) =
+                let defaultTraverse p =
+                    match p with
+                    | SynPat.Paren (p, _) -> traversePat p
+                    | SynPat.Or (p1, p2, _) -> [ p1; p2] |> List.tryPick traversePat
+                    | SynPat.Ands (ps, _)
+                    | SynPat.Tuple (_, ps, _)
+                    | SynPat.ArrayOrList (_, ps, _) -> ps |> List.tryPick traversePat
+                    | SynPat.Attrib (p, _, _) -> traversePat p
+                    | SynPat.LongIdent(_, _, _, args, _, _) ->
+                        match args with
+                        | SynArgPats.Pats ps -> ps |> List.tryPick traversePat
+                        | SynArgPats.NamePatPairs (ps, _) ->
+                            ps |> List.map snd |> List.tryPick traversePat
+                    | SynPat.Typed (p, ty, _) ->
+                        [ traversePat p; traverseSynType ty ] |> List.tryPick id
+                    | _ -> None
+                    
+                visitor.VisitPat (defaultTraverse, pat)
+
+            and traverseSynType (StripParenTypes ty) =
+                let defaultTraverse ty =
+                    match ty with
+                    | SynType.App (typeName, _, typeArgs, _, _, _, _)
+                    | SynType.LongIdentApp (typeName, _, _, typeArgs, _, _, _) ->
+                        [ yield typeName
+                          yield! typeArgs ]
+                        |> List.tryPick traverseSynType
+                    | SynType.Fun (ty1, ty2, _) -> [ty1; ty2] |> List.tryPick traverseSynType
+                    | SynType.MeasurePower (ty, _, _) 
+                    | SynType.HashConstraint (ty, _)
+                    | SynType.WithGlobalConstraints (ty, _, _)
+                    | SynType.Array (_, ty, _) -> traverseSynType ty
+                    | SynType.StaticConstantNamed (ty1, ty2, _)
+                    | SynType.MeasureDivide (ty1, ty2, _) -> [ty1; ty2] |> List.tryPick traverseSynType
+                    | SynType.Tuple (_, tys, _) -> tys |> List.map snd |> List.tryPick traverseSynType
+                    | SynType.StaticConstantExpr (expr, _) -> traverseSynExpr [] expr
+                    | SynType.Anon _ -> None
+                    | _ -> None
+
+                visitor.VisitType (defaultTraverse, ty)
+
+            and normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path traverseInherit (synMemberDefns:SynMemberDefns) =
+                synMemberDefns 
+                        // property getters are setters are two members that can have the same range, so do some somersaults to deal with this
+                        |> Seq.groupBy (fun x -> x.Range)
+                        |> Seq.choose (fun (r, mems) ->
+                            match mems |> Seq.toList with
+                            | [mem] -> // the typical case, a single member has this range 'r'
+                                Some (dive mem r (traverseSynMemberDefn path  traverseInherit))
+                            |  [SynMemberDefn.Member(Binding(_,_,_,_,_,_,_,SynPat.LongIdent(lid1,Some(info1),_,_,_,_),_,_,_,_),_) as mem1
+                                SynMemberDefn.Member(Binding(_,_,_,_,_,_,_,SynPat.LongIdent(lid2,Some(info2),_,_,_,_),_,_,_,_),_) as mem2] -> // can happen if one is a getter and one is a setter
+                                // ensure same long id
+                                assert( (lid1.Lid,lid2.Lid) ||> List.forall2 (fun x y -> x.idText = y.idText) )
+                                // ensure one is getter, other is setter
+                                assert( (info1.idText="set" && info2.idText="get") ||
+                                        (info2.idText="set" && info1.idText="get") )
+                                Some (
+                                        r,(fun() -> 
+                                        // both mem1 and mem2 have same range, would violate dive-and-pick assertions, so just try the first one, else try the second one:
+                                        match traverseSynMemberDefn path (fun _ -> None) mem1  with
+                                        | Some _ as x -> x
+                                        | _ -> traverseSynMemberDefn path (fun _ -> None) mem2 )
+                                    )
+                            | [] ->
+#if DEBUG
+                                assert(false)
+                                failwith "impossible, Seq.groupBy never returns empty results"
+#else
+                                // swallow AST error and recover silently
+                                None
+#endif
+                            | _ ->
+#if DEBUG
+                                assert(false) // more than 2 members claim to have the same range, this indicates a bug in the AST
+                                failwith "bug in AST"
+#else
+                                // swallow AST error and recover silently
+                                None
+#endif
+                            )
+
+            and traverseSynTypeDefn path (SynTypeDefn.TypeDefn(synComponentInfo, synTypeDefnRepr, synMemberDefns, tRange) as tydef) =
+                let path = TraverseStep.TypeDefn tydef :: path
                 
-            visitor.VisitPat (defaultTraverse, pat)
-
-        and traverseSynType (StripParenTypes ty) =
-            let defaultTraverse ty =
-                match ty with
-                | SynType.App (typeName, _, typeArgs, _, _, _, _)
-                | SynType.LongIdentApp (typeName, _, _, typeArgs, _, _, _) ->
-                    [ yield typeName
-                      yield! typeArgs ]
-                    |> List.tryPick traverseSynType
-                | SynType.Fun (ty1, ty2, _) -> [ty1; ty2] |> List.tryPick traverseSynType
-                | SynType.MeasurePower (ty, _, _) 
-                | SynType.HashConstraint (ty, _)
-                | SynType.WithGlobalConstraints (ty, _, _)
-                | SynType.Array (_, ty, _) -> traverseSynType ty
-                | SynType.StaticConstantNamed (ty1, ty2, _)
-                | SynType.MeasureDivide (ty1, ty2, _) -> [ty1; ty2] |> List.tryPick traverseSynType
-                | SynType.Tuple (_, tys, _) -> tys |> List.map snd |> List.tryPick traverseSynType
-                | SynType.StaticConstantExpr (expr, _) -> traverseSynExpr [] expr
-                | SynType.Anon _ -> None
-                | _ -> None
-
-            visitor.VisitType (defaultTraverse, ty)
-
-        and normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path traverseInherit (synMemberDefns:SynMemberDefns) =
-            synMemberDefns 
-                    // property getters are setters are two members that can have the same range, so do some somersaults to deal with this
-                    |> Seq.groupBy (fun x -> x.Range)
-                    |> Seq.choose (fun (r, mems) ->
-                        match mems |> Seq.toList with
-                        | [mem] -> // the typical case, a single member has this range 'r'
-                            Some (dive mem r (traverseSynMemberDefn path  traverseInherit))
-                        |  [SynMemberDefn.Member(Binding(_,_,_,_,_,_,_,SynPat.LongIdent(lid1,Some(info1),_,_,_,_),_,_,_,_),_) as mem1
-                            SynMemberDefn.Member(Binding(_,_,_,_,_,_,_,SynPat.LongIdent(lid2,Some(info2),_,_,_,_),_,_,_,_),_) as mem2] -> // can happen if one is a getter and one is a setter
-                            // ensure same long id
-                            assert( (lid1.Lid,lid2.Lid) ||> List.forall2 (fun x y -> x.idText = y.idText) )
-                            // ensure one is getter, other is setter
-                            assert( (info1.idText="set" && info2.idText="get") ||
-                                    (info2.idText="set" && info1.idText="get") )
-                            Some (
-                                    r,(fun() -> 
-                                    // both mem1 and mem2 have same range, would violate dive-and-pick assertions, so just try the first one, else try the second one:
-                                    match traverseSynMemberDefn path (fun _ -> None) mem1  with
-                                    | Some _ as x -> x
-                                    | _ -> traverseSynMemberDefn path (fun _ -> None) mem2 )
-                                )
-                        | [] ->
-#if DEBUG
-                            assert(false)
-                            failwith "impossible, Seq.groupBy never returns empty results"
-#else
-                            // swallow AST error and recover silently
-                            None
-#endif
-                        | _ ->
-#if DEBUG
-                            assert(false) // more than 2 members claim to have the same range, this indicates a bug in the AST
-                            failwith "bug in AST"
-#else
-                            // swallow AST error and recover silently
-                            None
-#endif
-                        )
-
-        and traverseSynTypeDefn path (SynTypeDefn.TypeDefn(synComponentInfo, synTypeDefnRepr, synMemberDefns, tRange) as tydef) =
-            let path = TraverseStep.TypeDefn tydef :: path
-            
-            match visitor.VisitComponentInfo synComponentInfo with
-            | Some x -> Some x
-            | None ->
-            [
-                match synTypeDefnRepr with
-                | SynTypeDefnRepr.Exception _ -> 
-                    // This node is generated in CheckExpressions.fs, not in the AST.  
-                    // But note exception declarations are missing from this tree walk.
-                    () 
-                | SynTypeDefnRepr.ObjectModel(synTypeDefnKind, synMemberDefns, _oRange) ->
-                    // traverse inherit function is used to capture type specific data required for processing Inherit part
-                    let traverseInherit (synType : SynType, range : range) = 
-                        visitor.VisitInheritSynMemberDefn(synComponentInfo, synTypeDefnKind, synType, synMemberDefns, range)
-                    yield! synMemberDefns |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path traverseInherit
-                | SynTypeDefnRepr.Simple(synTypeDefnSimpleRepr, _range) -> 
-                    match synTypeDefnSimpleRepr with
-                    | SynTypeDefnSimpleRepr.TypeAbbrev(_,synType,m) ->
-                        yield dive synTypeDefnRepr synTypeDefnRepr.Range (fun _ -> visitor.VisitTypeAbbrev(synType,m))
-                    | _ ->
-                        () // enums/DUs/record definitions don't have any SynExprs inside them
-                yield! synMemberDefns |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path (fun _ -> None)
-            ] |> pick tRange tydef
-
-        and traverseSynMemberDefn path traverseInherit (m:SynMemberDefn)  =
-            let pick (debugObj:obj) = pick m.Range debugObj
-            let path = TraverseStep.MemberDefn m :: path
-            match m with
-            | SynMemberDefn.Open(_longIdent, _range) -> None
-            | SynMemberDefn.Member(synBinding, _range) -> traverseSynBinding path synBinding
-            | SynMemberDefn.ImplicitCtor(_synAccessOption, _synAttributes, simplePats, _identOption, _doc, _range) ->
-                match simplePats with
-                | SynSimplePats.SimplePats(simplePats, _) -> visitor.VisitSimplePats(simplePats)
-                | _ -> None
-            | SynMemberDefn.ImplicitInherit(synType, synExpr, _identOption, range) -> 
-                [
-                    dive () synType.Range (fun () -> 
-                        match traverseInherit (synType, range) with
-                        | None -> visitor.VisitImplicitInherit(traverseSynExpr path, synType, synExpr, range)
-                        | x -> x)
-                    dive () synExpr.Range (fun() -> 
-                        visitor.VisitImplicitInherit(traverseSynExpr path, synType, synExpr, range)
-                        )
-                ] |> pick m
-            | SynMemberDefn.AutoProperty(_attribs, _isStatic, _id, _tyOpt, _propKind, _, _xmlDoc, _access, synExpr, _, _) -> traverseSynExpr path synExpr
-            | SynMemberDefn.LetBindings(synBindingList, _, _, range) -> 
-                match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
+                match visitor.VisitComponentInfo synComponentInfo with
                 | Some x -> Some x
-                | None -> synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path)) |> pick m
-            | SynMemberDefn.AbstractSlot(_synValSig, _memberFlags, _range) -> None
-            | SynMemberDefn.Interface(synType, synMemberDefnsOption, _range) -> 
-                match visitor.VisitInterfaceSynMemberDefnType(synType) with
-                | None -> 
-                    match synMemberDefnsOption with 
-                    | None -> None
-                    | Some(x) -> [ yield! x |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path (fun _ -> None) ]  |> pick x
-                | ok -> ok
-            | SynMemberDefn.Inherit(synType, _identOption, range) -> traverseInherit (synType, range)
-            | SynMemberDefn.ValField(_synField, _range) -> None
-            | SynMemberDefn.NestedType(synTypeDefn, _synAccessOption, _range) -> traverseSynTypeDefn path synTypeDefn
+                | None ->
+                [
+                    match synTypeDefnRepr with
+                    | SynTypeDefnRepr.Exception _ -> 
+                        // This node is generated in CheckExpressions.fs, not in the AST.  
+                        // But note exception declarations are missing from this tree walk.
+                        () 
+                    | SynTypeDefnRepr.ObjectModel(synTypeDefnKind, synMemberDefns, _oRange) ->
+                        // traverse inherit function is used to capture type specific data required for processing Inherit part
+                        let traverseInherit (synType : SynType, range : range) = 
+                            visitor.VisitInheritSynMemberDefn(synComponentInfo, synTypeDefnKind, synType, synMemberDefns, range)
+                        yield! synMemberDefns |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path traverseInherit
+                    | SynTypeDefnRepr.Simple(synTypeDefnSimpleRepr, _range) -> 
+                        match synTypeDefnSimpleRepr with
+                        | SynTypeDefnSimpleRepr.TypeAbbrev(_,synType,m) ->
+                            yield dive synTypeDefnRepr synTypeDefnRepr.Range (fun _ -> visitor.VisitTypeAbbrev(synType,m))
+                        | _ ->
+                            () // enums/DUs/record definitions don't have any SynExprs inside them
+                    yield! synMemberDefns |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path (fun _ -> None)
+                ] |> pick tRange tydef
 
-        and traverseSynMatchClause path mc =
-            let path = TraverseStep.MatchClause mc :: path
-            let defaultTraverse mc =
-                match mc with
-                | (SynMatchClause.Clause(synPat, synExprOption, synExpr, _range, _sequencePointInfoForTarget) as all) ->
-                    [dive synPat synPat.Range traversePat]
-                    @
-                    ([
-                        match synExprOption with
-                        | None -> ()
-                        | Some guard -> yield guard
-                        yield synExpr
-                     ] 
-                     |> List.map (fun x -> dive x x.Range (traverseSynExpr path))
-                    )|> pick all.Range all
-            visitor.VisitMatchClause(defaultTraverse,mc)
+            and traverseSynMemberDefn path traverseInherit (m:SynMemberDefn)  =
+                let pick (debugObj:obj) = pick m.Range debugObj
+                let path = TraverseStep.MemberDefn m :: path
+                match m with
+                | SynMemberDefn.Open(_longIdent, _range) -> None
+                | SynMemberDefn.Member(synBinding, _range) -> traverseSynBinding path synBinding
+                | SynMemberDefn.ImplicitCtor(_synAccessOption, _synAttributes, simplePats, _identOption, _doc, _range) ->
+                    match simplePats with
+                    | SynSimplePats.SimplePats(simplePats, _) -> visitor.VisitSimplePats(simplePats)
+                    | _ -> None
+                | SynMemberDefn.ImplicitInherit(synType, synExpr, _identOption, range) -> 
+                    [
+                        dive () synType.Range (fun () -> 
+                            match traverseInherit (synType, range) with
+                            | None -> visitor.VisitImplicitInherit(traverseSynExpr path, synType, synExpr, range)
+                            | x -> x)
+                        dive () synExpr.Range (fun() -> 
+                            visitor.VisitImplicitInherit(traverseSynExpr path, synType, synExpr, range)
+                            )
+                    ] |> pick m
+                | SynMemberDefn.AutoProperty(_attribs, _isStatic, _id, _tyOpt, _propKind, _, _xmlDoc, _access, synExpr, _, _) -> traverseSynExpr path synExpr
+                | SynMemberDefn.LetBindings(synBindingList, _, _, range) -> 
+                    match visitor.VisitLetOrUse(path, traverseSynBinding path, synBindingList, range) with
+                    | Some x -> Some x
+                    | None -> synBindingList |> List.map (fun x -> dive x x.RangeOfBindingAndRhs (traverseSynBinding path)) |> pick m
+                | SynMemberDefn.AbstractSlot(_synValSig, _memberFlags, _range) -> None
+                | SynMemberDefn.Interface(synType, synMemberDefnsOption, _range) -> 
+                    match visitor.VisitInterfaceSynMemberDefnType(synType) with
+                    | None -> 
+                        match synMemberDefnsOption with 
+                        | None -> None
+                        | Some(x) -> [ yield! x |> normalizeMembersToDealWithPeculiaritiesOfGettersAndSetters path (fun _ -> None) ]  |> pick x
+                    | ok -> ok
+                | SynMemberDefn.Inherit(synType, _identOption, range) -> traverseInherit (synType, range)
+                | SynMemberDefn.ValField(_synField, _range) -> None
+                | SynMemberDefn.NestedType(synTypeDefn, _synAccessOption, _range) -> traverseSynTypeDefn path synTypeDefn
 
-        and traverseSynBinding path b =
-            let defaultTraverse b =
-                let path = TraverseStep.Binding b :: path
-                match b with
-                | (SynBinding.Binding(_synAccessOption, _synBindingKind, _, _, _synAttributes, _preXmlDoc, _synValData, synPat, _synBindingReturnInfoOption, synExpr, _range, _sequencePointInfoForBinding)) ->
-                    [ traversePat synPat
-                      traverseSynExpr path synExpr ]
-                    |> List.tryPick id
-            visitor.VisitBinding(defaultTraverse,b)
+            and traverseSynMatchClause path mc =
+                let path = TraverseStep.MatchClause mc :: path
+                let defaultTraverse mc =
+                    match mc with
+                    | (SynMatchClause.Clause(synPat, synExprOption, synExpr, _range, _sequencePointInfoForTarget) as all) ->
+                        [dive synPat synPat.Range traversePat]
+                        @
+                        ([
+                            match synExprOption with
+                            | None -> ()
+                            | Some guard -> yield guard
+                            yield synExpr
+                         ] 
+                         |> List.map (fun x -> dive x x.Range (traverseSynExpr path))
+                        )|> pick all.Range all
+                visitor.VisitMatchClause(defaultTraverse,mc)
 
-        match parseTree with
-        | ParsedInput.ImplFile (ParsedImplFileInput (_,_,_,_,_,l,_))-> 
-            let fileRange =
+            and traverseSynBinding path b =
+                let defaultTraverse b =
+                    let path = TraverseStep.Binding b :: path
+                    match b with
+                    | (SynBinding.Binding(_synAccessOption, _synBindingKind, _, _, _synAttributes, _preXmlDoc, _synValData, synPat, _synBindingReturnInfoOption, synExpr, _range, _sequencePointInfoForBinding)) ->
+                        [ traversePat synPat
+                          traverseSynExpr path synExpr ]
+                        |> List.tryPick id
+                visitor.VisitBinding(defaultTraverse,b)
+
+            match parseTree with
+            | ParsedInput.ImplFile (ParsedImplFileInput (_,_,_,_,_,l,_))-> 
+                let fileRange =
 #if DEBUG
-                match l with [] -> range0 | _ -> l |> List.map (fun x -> x.Range) |> List.reduce unionRanges
+                    match l with [] -> range0 | _ -> l |> List.map (fun x -> x.Range) |> List.reduce unionRanges
 #else
-                range0  // only used for asserting, does not matter in non-debug
+                    range0  // only used for asserting, does not matter in non-debug
 #endif
-            l |> List.map (fun x -> dive x x.Range (traverseSynModuleOrNamespace [])) |> pick fileRange l
-        | ParsedInput.SigFile _sigFile -> None
+                l |> List.map (fun x -> dive x x.Range (traverseSynModuleOrNamespace [])) |> pick pos fileRange l
+            | ParsedInput.SigFile _sigFile -> None
+            
+
+    /// traverse an implementation file walking all the way down to SynExpr or TypeAbbrev at a particular location
+    ///
+    let Traverse(pos:pos, parseTree, visitor:AstVisitorBase<'T>) =
+        let pick x = pick pos x
+
+
