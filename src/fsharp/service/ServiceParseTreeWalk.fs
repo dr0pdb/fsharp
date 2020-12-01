@@ -115,7 +115,7 @@ module public AstTraversal =
     let dive node range project =
         range,(fun() -> project node)
 
-    let pick (pos: pos option) (outerRange:range) (_debugObj:obj) (diveResults:list<range*_>) =
+    let pick pos (outerRange:range) (_debugObj:obj) (diveResults:list<range*_>) =
         match diveResults with
         | [] -> None
         | _ ->
@@ -163,9 +163,18 @@ module public AstTraversal =
             None
 #endif
 
-    type AstTraversalBase(parseTree: ParsedInput, visitor:AstVisitorBase<'T>, ?pos:pos) =
+    // todo: get _ out of elem and combine that with acc. it is wrong right now.
+    let traverseAll defaultValue combine (_outerRange:range) (_debugObj:obj) (diveResults:list<range*_>) =
+        List.fold (fun acc elem -> combine acc elem) defaultValue diveResults
+
+    type AstTraversalBase(parseTree: ParsedInput, visitor:AstVisitorBase<'T>, ?pos:pos, ?combine, ?defaultValue:'a option) =
         member x.Traverse() =
-            let pick x = pick pos x
+            //let pick x = pick pos x
+
+            let pickOrFold x =
+                match pos with
+                | None -> traverseAll defaultValue combine x
+                | Some p -> pick p x
             
             let rec traverseSynModuleDecl path (decl:SynModuleDecl) =
                 let pick = pick decl.Range
