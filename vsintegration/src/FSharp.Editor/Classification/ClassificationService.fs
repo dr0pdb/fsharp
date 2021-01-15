@@ -20,6 +20,7 @@ open Microsoft.CodeAnalysis.ExternalAccess.FSharp.Classification
 open Microsoft.CodeAnalysis
 open FSharp.Compiler.SourceCodeServices
 open FSharp.Compiler.Text
+open FSharp.Compiler.Text.Range
 
 // IEditorClassificationService is marked as Obsolete, but is still supported. The replacement (IClassificationService)
 // is internal to Microsoft.CodeAnalysis.Workspaces which we don't have internals visible to. Rather than add yet another
@@ -28,7 +29,7 @@ open FSharp.Compiler.Text
 
 #nowarn "57"
 
-type SemanticClassificationData = (struct(Range * SemanticClassificationType)[])
+type SemanticClassificationData = SemanticClassificationView option
 type SemanticClassificationLookup = IReadOnlyDictionary<int, ResizeArray<struct(range * SemanticClassificationType)>>
 
 [<Sealed>]
@@ -119,16 +120,22 @@ type internal FSharpClassificationService
 
     static let toSemanticClassificationLookup (data: SemanticClassificationData) =
         let lookup = System.Collections.Generic.Dictionary<int, ResizeArray<struct(Range * SemanticClassificationType)>>()
-        for i = 0 to data.Length - 1 do
-            let (struct(r, _) as dataItem) = data.[i]
-            let items =
-                match lookup.TryGetValue r.StartLine with
-                | true, items -> items
-                | _ ->
-                    let items = ResizeArray()
-                    lookup.[r.StartLine] <- items
-                    items
-            items.Add dataItem
+        match data with
+        | None -> ()
+        | Some d ->
+            let f (struct(r: Range, _) as dataItem) =
+                let items =
+                    match lookup.TryGetValue r.StartLine with
+                    | true, items -> items
+                    | _ ->
+                        let items = ResizeArray()
+                        lookup.[r.StartLine] <- items
+                        items
+
+                items.Add dataItem
+
+            d.ForEach(f)
+                    
         System.Collections.ObjectModel.ReadOnlyDictionary lookup :> IReadOnlyDictionary<_, _>
 
     let semanticClassificationCache = new DocumentCache<SemanticClassificationLookup>()

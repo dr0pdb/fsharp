@@ -141,6 +141,7 @@ Renamings in `FSharp.Compiler.SourceCodeServices`:
 ```
 
 * Extension methods in `ServiceAssemblyContent.fsi` are now now intrinsic methods on the symbol types themselves.
+* `GetBackgroundSemanticClassificationForFile` now returns `Async<SemanticClassificationView option>` instead of `Async<struct(range * SemanticClassificationType) []>`. The `SemanticClassificationView` provides a read-only view over the semantic classification contents via the `ForEach (struct(range * SemanticClassificationType) -> unit) -> unit` function.
 
 The following namespaces have been made internal
 
