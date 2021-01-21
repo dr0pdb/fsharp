@@ -16,7 +16,7 @@ open FSharp.Compiler.Text.Range
 #nowarn "9"
 
 [<Sealed>]
-type SemanticClassificationView(mmf: MemoryMappedFile, length) =
+type FSharpSemanticClassificationView(mmf: MemoryMappedFile, length) =
     member _.ReadRange(reader: byref<BlobReader>) =
         let startLine = reader.ReadInt32()
         let startColumn = reader.ReadInt32()
@@ -46,7 +46,7 @@ and [<Sealed>] SemanticClassificationKeyStore(mmf: MemoryMappedFile, length) =
 
     member _.GetView() =
         checkDispose()
-        SemanticClassificationView(mmf, length)
+        FSharpSemanticClassificationView(mmf, length)
 
     interface IDisposable with
 

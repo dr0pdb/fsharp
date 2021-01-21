@@ -8,7 +8,7 @@ open FSharp.Compiler.Text
 
 /// Provides a read only view to iterate over the semantic classification contents.
 [<Sealed>]
-type SemanticClassificationView =
+type FSharpSemanticClassificationView =
 
     /// Iterate through the stored (range * SemanticClassificationType) entries from the store and apply the passed function on each entry.
     member ForEach: (struct(range * SemanticClassificationType) -> unit) -> unit
@@ -20,7 +20,7 @@ type internal SemanticClassificationKeyStore =
     interface IDisposable
 
     /// Get a read only view on the semantic classification key store
-    member GetView: unit -> SemanticClassificationView
+    member GetView: unit -> FSharpSemanticClassificationView
 
 
 /// A builder that will build an semantic classification key store based on the written Item and its associated range.
