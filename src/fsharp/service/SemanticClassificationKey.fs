@@ -28,7 +28,7 @@ type FSharpSemanticClassificationView(mmf: MemoryMappedFile, length) =
         let posEnd = mkPos endLine endColumn
         mkFileIndexRange fileIndex posStart posEnd
 
-    member this.ForEach(f: struct(range * SemanticClassificationType) -> unit) =
+    member this.ForEach(f: FSharpSemanticClassificationItem -> unit) =
         use view = mmf.CreateViewAccessor(0L, length)
         let mutable reader = BlobReader(view.SafeMemoryMappedViewHandle.DangerousGetHandle() |> NativePtr.ofNativeInt, int length)
 
@@ -36,7 +36,8 @@ type FSharpSemanticClassificationView(mmf: MemoryMappedFile, length) =
         while reader.Offset < reader.Length do
             let m = this.ReadRange &reader
             let sct = reader.ReadInt32()
-            f struct(m, (enum<SemanticClassificationType>(sct)))
+            let item = FSharpSemanticClassificationItem((m, (enum<SemanticClassificationType>(sct))))
+            f item
 
 and [<Sealed>] SemanticClassificationKeyStore(mmf: MemoryMappedFile, length) =
     let mutable isDisposed = false
@@ -58,11 +59,9 @@ and [<Sealed>] SemanticClassificationKeyStoreBuilder() =
 
     let b = BlobBuilder()
 
-    member _.WriteAll (semanticClassification: struct(range * SemanticClassificationType)[]) =
-        let formatter = BinaryFormatter()
-        use stream = new MemoryStream()
-        formatter.Serialize(stream, semanticClassification)
-        b.WriteBytes(stream.ToArray())
+    member _.WriteAll (semanticClassification: FSharpSemanticClassificationItem[]) =
+        use ptr = fixed semanticClassification
+        b.WriteBytes(NativePtr.ofNativeInt (NativePtr.toNativeInt ptr), semanticClassification.Length * sizeof<FSharpSemanticClassificationItem>)
 
     member _.TryBuildAndReset() =
         if b.Count > 0 then

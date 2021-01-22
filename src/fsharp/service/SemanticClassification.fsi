@@ -51,10 +51,17 @@ type SemanticClassificationType =
     | TypeDef = 35
     | Plaintext = 36
 
+[<RequireQualifiedAccess>]
+[<Struct>]
+type FSharpSemanticClassificationItem =
+    val Range: range
+    val Type: SemanticClassificationType
+    new: (range * SemanticClassificationType) -> FSharpSemanticClassificationItem
+
 /// Extension methods for the TcResolutions type.
 [<AutoOpen>]
 module internal TcResolutionsExtensions =
     val (|CNR|) : cnr: CapturedNameResolution -> (Item * ItemOccurence * DisplayEnv * NameResolutionEnv * AccessorDomain * range)
 
     type TcResolutions with
-        member GetSemanticClassification: g: TcGlobals * amap: ImportMap * formatSpecifierLocations: (range * int) [] * range: range option -> struct(range * SemanticClassificationType) []
+        member GetSemanticClassification: g: TcGlobals * amap: ImportMap * formatSpecifierLocations: (range * int) [] * range: range option -> FSharpSemanticClassificationItem []

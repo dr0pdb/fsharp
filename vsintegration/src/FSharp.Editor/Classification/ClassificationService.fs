@@ -29,8 +29,8 @@ open FSharp.Compiler.Text.Range
 
 #nowarn "57"
 
-type SemanticClassificationData = SemanticClassificationView option
-type SemanticClassificationLookup = IReadOnlyDictionary<int, ResizeArray<struct(range * SemanticClassificationType)>>
+type SemanticClassificationData = FSharpSemanticClassificationView option
+type SemanticClassificationLookup = IReadOnlyDictionary<int, ResizeArray<FSharpSemanticClassificationItem>>
 
 [<Sealed>]
 type DocumentCache<'Value when 'Value : not struct>() =
@@ -99,17 +99,17 @@ type internal FSharpClassificationService
 
         result.ToImmutable()
 
-    static let addSemanticClassification sourceText (targetSpan: TextSpan) items (outputResult: List<ClassifiedSpan>) =
-        for struct(range, classificationType) in items do
-            match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, range) with
+    static let addSemanticClassification sourceText (targetSpan: TextSpan) (items: seq<FSharpSemanticClassificationItem>) (outputResult: List<ClassifiedSpan>) =
+        for item in items do
+            match RoslynHelpers.TryFSharpRangeToTextSpan(sourceText, item.Range) with
             | None -> ()
             | Some span -> 
                 let span = 
-                    match classificationType with
+                    match item.Type with
                     | SemanticClassificationType.Printf -> span
                     | _ -> Tokenizer.fixupSpan(sourceText, span)
                 if targetSpan.Contains span then
-                    outputResult.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(classificationType)))
+                    outputResult.Add(ClassifiedSpan(span, FSharpClassificationTypes.getClassificationTypeName(item.Type)))
 
     static let addSemanticClassificationByLookup sourceText (targetSpan: TextSpan) (lookup: SemanticClassificationLookup) (outputResult: List<ClassifiedSpan>) =
         let r = RoslynHelpers.TextSpanToFSharpRange("", targetSpan, sourceText)
@@ -119,17 +119,17 @@ type internal FSharpClassificationService
             | _ -> ()
 
     static let toSemanticClassificationLookup (data: SemanticClassificationData) =
-        let lookup = System.Collections.Generic.Dictionary<int, ResizeArray<struct(Range * SemanticClassificationType)>>()
+        let lookup = System.Collections.Generic.Dictionary<int, ResizeArray<FSharpSemanticClassificationItem>>()
         match data with
         | None -> ()
         | Some d ->
-            let f (struct(r: Range, _) as dataItem) =
+            let f (dataItem: FSharpSemanticClassificationItem) =
                 let items =
-                    match lookup.TryGetValue r.StartLine with
+                    match lookup.TryGetValue dataItem.Range.StartLine with
                     | true, items -> items
                     | _ ->
                         let items = ResizeArray()
-                        lookup.[r.StartLine] <- items
+                        lookup.[dataItem.Range.StartLine] <- items
                         items
 
                 items.Add dataItem
